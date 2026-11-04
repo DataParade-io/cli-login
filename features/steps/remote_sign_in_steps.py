@@ -114,7 +114,7 @@ def run_cli(context, on_poll):
     try:
         remote_login(Target(), context.stored.append, http=product.http, out=context.printed.append,
                      clock=lambda: product.now, sleep=sleep, host="cloud-box",
-                     expected_email=getattr(context, "expected_email", None))
+                     expected_email=getattr(context, "expected_email", None), login_command="app login --remote example.test")
     except RemoteLoginError as error:
         context.error = error
 
@@ -287,6 +287,20 @@ def step_expired(context):
 @then("the CLI reports that the tokens were for a different request")
 def step_nonce(context):
     assert context.error.code == "nonce_mismatch"
+
+
+@then("the report tells the person to start the sign-in again and that nothing was saved")
+def step_nonce_again(context):
+    message = str(context.error)
+    assert "Start the sign-in again with `app login --remote example.test`." in message and "nothing was saved" in message
+
+
+@then("the report carries one-way tags that tell the cases apart and no nonce or token")
+def step_nonce_tags(context):
+    diagnostics = context.error.diagnostics
+    assert set(diagnostics) == {"enroll", "broker_nonce", "transaction", "own_nonce", "expected_nonce", "received_nonce"}
+    assert diagnostics["received_nonce"] != diagnostics["expected_nonce"]
+    assert "another" not in str(context.error) and getattr(context, "transaction", "no-transaction") not in str(context.error)
 
 
 @then("the page says the link is no longer valid")
