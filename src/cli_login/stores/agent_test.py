@@ -1,4 +1,5 @@
 import os
+import shlex
 import shutil
 import socket
 import stat
@@ -201,6 +202,32 @@ def test_the_command_line_serves_in_the_background_reports_and_stops(state):
         done = run("stop")
     assert "stopped" in done.stdout
     assert run("status").returncode == 1
+
+
+def test_the_advice_names_the_running_interpreter_by_full_path():
+    words = shlex.split(agent.agent_command("ns"))
+    assert words[0] == sys.executable and os.path.isabs(words[0])
+    assert words[1:] == ["-m", "cli_login.stores.agent", "serve", "--namespace", "ns", "--background"]
+
+
+def test_the_advice_quotes_paths_with_spaces(monkeypatch):
+    monkeypatch.setattr(sys, "executable", "/opt/my tools/venv/bin/python")
+    command = agent.agent_command("ns", state_dir="/tmp/a b", socket_path="/tmp/it's/agent.sock")
+    assert shlex.split(command) == [
+        "/opt/my tools/venv/bin/python", "-m", "cli_login.stores.agent", "serve", "--namespace", "ns",
+        "--state-dir", "/tmp/a b", "--socket", "/tmp/it's/agent.sock", "--background",
+    ]
+
+
+@unix
+def test_the_advice_works_when_pasted_into_a_shell(state):
+    command = agent.agent_command("ns", state_dir=state)
+    try:
+        started = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=60, check=False)
+        assert started.returncode == 0, started.stderr
+        assert agent.status("ns", state_dir=state) is not None
+    finally:
+        agent.stop("ns", state_dir=state)
 
 
 def test_windows_is_not_supported(monkeypatch, tmp_path):

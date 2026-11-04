@@ -244,7 +244,10 @@ and tests). Any other value is refused.
 ### Cloud machines and containers
 
 A cloud machine usually has no desktop keyring, and Docker's default seccomp profile blocks the kernel keyring
-calls. Start the memory agent once per product, then sign in again:
+calls. Start the memory agent once per product, then sign in again. The error message prints the exact command,
+with the full path of the interpreter that has `cli-login` installed; use that one. A bare `python` cannot import
+the library when a product installs it in a private environment (`pipx`, `uv tool`), so in these examples
+`python` stands for that interpreter:
 
 ```bash
 python -m cli_login.stores.agent serve --namespace <product-namespace> --background
