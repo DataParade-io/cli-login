@@ -108,6 +108,11 @@ is sent as the OpenID `nonce`, and the ID token must carry it back or the login 
 `enroll(tokens, state, enrollment)` then runs before anything is stored, and if it raises the tokens are discarded
 and the refresh token is revoked on a best-effort basis.
 
+A `nonce_mismatch` stores nothing, tells the person to start the sign-in again, and is never retried with a different
+expected nonce. Its error carries `diagnostics` that tell the cases apart without exposing anything: whether `enroll`
+was given, whether the broker handed over a nonce, and eight-character SHA-256 tags of the transaction, the CLI's own
+nonce, the nonce it expected and the nonce the ID token carried.
+
 A network failure during the exchange is **not** retried, because the code may already be spent. The CLI starts
 again.
 

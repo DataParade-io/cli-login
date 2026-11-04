@@ -30,9 +30,10 @@ from .errors import AuthError, OAuthError
 class RemoteLoginError(OAuthError):
     """A remote sign-in that did not finish. ``transient`` says whether trying again later may work."""
 
-    def __init__(self, code: str, message: str, *, transient: bool = False):
+    def __init__(self, code: str, message: str, *, transient: bool = False, diagnostics: Mapping[str, str] | None = None):
         self.code = code
         self.transient = transient
+        self.diagnostics = dict(diagnostics or {})
         AuthError.__init__(self, message)
 
 
@@ -53,6 +54,15 @@ def default_http(method: str, url: str, *, json_body=None, form=None, timeout: f
     except ValueError:
         body = {}
     return status, body if isinstance(body, dict) else {}, {key.lower(): value for key, value in headers.items()}
+
+
+def _fingerprint(value: object) -> str:
+    """A short, non-reversible tag for comparing two values in a report; the value itself is never shown."""
+    if value is None:
+        return "none"
+    if not isinstance(value, str):
+        return "invalid"
+    return hashlib.sha256(value.encode()).hexdigest()[:8]
 
 
 def _b64url(data: bytes) -> str:
@@ -103,6 +113,7 @@ def remote_login(
     expected_email: str | None = None,
     enroll: Callable[[Mapping[str, Any], str, str | None], Any] | None = None,
     token=secrets.token_urlsafe,
+    login_command: str | None = None,
 ):
     """Sign in through the target's broker and return what ``store_token_set`` returns.
 
@@ -120,6 +131,11 @@ def remote_login(
     enrollment of each login (the Cyclotron lab enrolls each Cognito login at Prospectus). Only then does the CLI
     accept an OpenID nonce chosen by the product's approval page, which the broker hands over with the code;
     without ``enroll`` the CLI checks its own nonce and nothing else.
+
+    ``login_command`` is the command that starts this sign-in again; the nonce-mismatch error names it. That error
+    also carries ``diagnostics``: whether ``enroll`` was given, whether the broker handed over a nonce, and short
+    one-way tags of the transaction and of the nonces (never a token or a nonce), so a failure that does not repeat
+    can still be told apart from one that does.
     """
     broker = getattr(target, "broker_endpoint", None)
     if not broker:
@@ -207,7 +223,21 @@ def remote_login(
     claims = _claims(tokens.get("id_token"))
     expected_nonce = answer.get("nonce") if enroll is not None and isinstance(answer.get("nonce"), str) else nonce
     if claims.get("nonce") != expected_nonce:
-        raise RemoteLoginError("nonce_mismatch", "The sign-in answered tokens for a different request; nothing was saved.")
+        diagnostics = {
+            "enroll": "on" if enroll is not None else "off",
+            "broker_nonce": "none" if answer.get("nonce") is None else "handed",
+            "transaction": _fingerprint(transaction),
+            "own_nonce": _fingerprint(nonce),
+            "expected_nonce": _fingerprint(expected_nonce),
+            "received_nonce": _fingerprint(claims.get("nonce")),
+        }
+        again = f"Start the sign-in again with `{login_command}`." if login_command else "Start the sign-in again."
+        raise RemoteLoginError(
+            "nonce_mismatch",
+            f"The sign-in answered tokens for a different request; nothing was saved. {again} "
+            f"If it repeats, report these tags (one-way, no secrets): {' '.join(f'{k}={v}' for k, v in diagnostics.items())}.",
+            diagnostics=diagnostics,
+        )
     email = claims.get("email") if isinstance(claims.get("email"), str) else None
     if expected_email is not None and (email or "").casefold() != expected_email.casefold():
         raise RemoteLoginError("unexpected_identity", "Someone other than the expected person approved this sign-in; nothing was saved.")
