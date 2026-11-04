@@ -56,6 +56,8 @@ Feature: Remote sign-in from another device
     When the CLI starts a remote sign-in
     And the person approves it but the sign-in provider answers tokens for a different nonce
     Then the CLI reports that the tokens were for a different request
+    And the report tells the person to start the sign-in again and that nothing was saved
+    And the report carries one-way tags that tell the cases apart and no nonce or token
     And no session is stored
 
   Scenario: Someone who reads the link in chat and approves first does not get the session

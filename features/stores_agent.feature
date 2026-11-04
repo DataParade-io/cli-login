@@ -40,6 +40,11 @@ Feature: The memory agent
     Given no memory agent is running
     Then a client store is unavailable with guidance mentioning "agent serve"
 
+  Scenario: The start-up advice works when pasted, even where the library is installed in a private environment
+    Given no memory agent is running
+    Then the start-up advice names the running interpreter by its full path
+    And pasting the start-up advice into a shell starts a running agent
+
   Scenario: A second agent for the same product is refused
     Given a running memory agent for the namespace "example-product"
     Then starting another agent for the namespace "example-product" fails

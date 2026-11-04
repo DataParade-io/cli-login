@@ -354,3 +354,57 @@ def test_a_refused_enrollment_stores_nothing():
         remote_login(Target(), stored.append, http=world.http, out=world.printed.append, clock=world.clock,
                      sleep=world.sleep, host="cloud-box", enroll=enrolling(world, calls, fail=True))
     assert raised.value.code == "enrollment_refused" and stored == []
+
+
+def test_a_nonce_mismatch_says_to_start_again_and_reports_one_way_tags_without_any_nonce():
+    world, stored = World(), []
+    original = world.http
+
+    def swapped(method, url, **kwargs):
+        status, body, headers = original(method, url, **kwargs)
+        if url == TOKEN and status == 200:
+            body["id_token"] = jwt({"nonce": "someone-elses-nonce"})
+        return status, body, headers
+
+    world.http = swapped
+    with pytest.raises(RemoteLoginError) as raised:
+        remote_login(Target(), stored.append, http=world.http, out=world.printed.append, clock=world.clock, sleep=world.sleep,
+                     host="cloud-box", login_command="app login --remote example.test")
+    error = raised.value
+    assert error.code == "nonce_mismatch" and stored == []
+    assert "nothing was saved" in str(error) and "Start the sign-in again with `app login --remote example.test`." in str(error)
+    tag = hashlib.sha256(b"someone-elses-nonce").hexdigest()[:8]
+    assert error.diagnostics["received_nonce"] == tag and error.diagnostics["enroll"] == "off"
+    assert error.diagnostics["broker_nonce"] == "none" and error.diagnostics["expected_nonce"] == error.diagnostics["own_nonce"]
+    assert error.diagnostics["transaction"] == hashlib.sha256(world.transaction.encode()).hexdigest()[:8]
+    assert "someone-elses-nonce" not in str(error) and world.transaction not in str(error)
+    assert all(len(value) <= 8 for key, value in error.diagnostics.items() if key.endswith("nonce") or key == "transaction")
+
+
+def test_the_diagnostics_tell_a_page_that_used_the_product_nonce_from_a_cli_that_did_not_enroll():
+    world, stored = World(product_nonce="challenge-nonce-0001"), []
+    with pytest.raises(RemoteLoginError) as raised:
+        remote_login(Target(), stored.append, http=world.http, out=world.printed.append, clock=world.clock,
+                     sleep=world.sleep, host="cloud-box")
+    diagnostics = raised.value.diagnostics
+    assert diagnostics["enroll"] == "off" and diagnostics["broker_nonce"] == "handed"
+    assert diagnostics["received_nonce"] == hashlib.sha256(b"challenge-nonce-0001").hexdigest()[:8] != diagnostics["expected_nonce"]
+    assert stored == [] and "Start the sign-in again." in str(raised.value)
+
+
+def test_an_enrolling_cli_that_gets_the_other_nonce_refuses_and_never_retries_with_it():
+    world, stored, calls = World(product_nonce="challenge-nonce-0001"), [], []
+    original = world.http
+
+    def swapped(method, url, **kwargs):
+        status, body, headers = original(method, url, **kwargs)
+        if url == TOKEN and status == 200:
+            body["id_token"] = jwt({"nonce": "own-nonce-not-the-products"})
+        return status, body, headers
+
+    world.http = swapped
+    with pytest.raises(RemoteLoginError) as raised:
+        remote_login(Target(), stored.append, http=world.http, out=world.printed.append, clock=world.clock,
+                     sleep=world.sleep, host="cloud-box", enroll=enrolling(world, calls))
+    assert raised.value.code == "nonce_mismatch" and raised.value.diagnostics["enroll"] == "on"
+    assert raised.value.diagnostics["broker_nonce"] == "handed" and stored == [] and calls == [] and len(world.exchanges) == 1

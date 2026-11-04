@@ -332,3 +332,28 @@ def test_a_malformed_product_nonce_or_enrollment_is_refused_and_nothing_is_bound
     transaction = started(b)
     assert b.bind({"transaction": transaction, "nonce_hash": sha256_hex("n"), **extra}) == {"ok": False, "error": "unavailable"}
     assert b.describe({"transaction": transaction})["ok"] is True
+
+
+def test_a_second_bind_cannot_replace_the_nonce_or_enrollment_of_the_first():
+    b = broker()
+    transaction = started(b)
+    assert b.bind({"transaction": transaction, "nonce_hash": sha256_hex("n1"), "nonce": "challenge-nonce-0001",
+                   "enrollment": "proof-1"}) == {"ok": True}
+    assert b.bind({"transaction": transaction, "nonce_hash": sha256_hex("n2"), "nonce": "challenge-nonce-0002",
+                   "enrollment": "proof-2"}) == {"ok": False, "error": "unavailable"}
+    item = b.store.get(transaction)
+    assert item["oidc_nonce"] == "challenge-nonce-0001" and item["enrollment"] == "proof-1" and item["nonce_hash"] == sha256_hex("n1")
+
+
+def test_a_code_completed_for_one_transaction_is_never_handed_to_another_transactions_poll():
+    clock = Clock()
+    b = broker(clock)
+    first, second = started(b), started(b)
+    b.bind({"transaction": first, "nonce_hash": sha256_hex("n1"), "nonce": "challenge-nonce-0001", "enrollment": "proof-1"})
+    b.bind({"transaction": second, "nonce_hash": sha256_hex("n2")})
+    assert b.complete({"transaction": first, "nonce": "n2", "code": "code-1"}) == {"ok": False, "error": "unavailable"}
+    assert b.complete({"transaction": first, "nonce": "n1", "code": "code-1"}) == {"ok": True}
+    clock.now += 5
+    assert b.poll({"transaction": second, "poll_secret": SECRET}, "ip")[1]["error"] == "authorization_pending"
+    status, answer = b.poll({"transaction": first, "poll_secret": SECRET}, "ip")
+    assert status == 200 and answer["code"] == "code-1" and answer["nonce"] == "challenge-nonce-0001"

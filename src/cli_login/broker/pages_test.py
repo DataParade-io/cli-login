@@ -172,3 +172,47 @@ def test_when_prepare_fails_nothing_is_bound_and_the_link_still_works():
 def counter():
     tokens = iter(f"tok{n:02d}" for n in range(99))
     return lambda _n: next(tokens)
+
+
+def post_approve(pages, transaction, csrf):
+    return pages.approve("POST", {}, {"t": transaction, "csrf": csrf, "action": "approve", "confirm": "yes"}, {CSRF_COOKIE: csrf})
+
+
+def test_a_replayed_approval_cannot_change_the_nonce_the_first_approval_bound():
+    broker, _, transaction = world()
+    challenges = iter(["challenge-nonce-0001", "challenge-nonce-0002"])
+    pages = ApprovalPages(broker.handle, authorize_endpoint=AUTHORIZE, product="Example", privileges="Act as you.",
+                          prepare=lambda t, described: (next(challenges), "sealed-proof"), token=counter())
+    csrf = cookie(pages.approve("GET", {"t": transaction}, {}, {}), CSRF_COOKIE)
+    first = post_approve(pages, transaction, csrf)
+    replay = post_approve(pages, transaction, csrf)  # back button, a second tab or a double submit with the old cookie
+    assert first.status == 303 and replay.status == 410
+    assert cookie(replay, NONCE_COOKIE) is None and "Location" not in dict(replay.headers)
+    assert broker.store.get(transaction)["oidc_nonce"] == "challenge-nonce-0001"
+
+
+def test_two_approvals_that_race_bind_one_nonce_and_only_that_one_reaches_the_provider():
+    import threading
+
+    broker, _, transaction = world()
+    meeting = threading.Barrier(2, timeout=5)
+    challenges, lock = iter(["challenge-nonce-0001", "challenge-nonce-0002"]), threading.Lock()
+
+    def prepare(t, described):
+        meeting.wait()  # both requests have seen the transaction pending before either binds
+        with lock:
+            return next(challenges), "sealed-proof"
+
+    pages = ApprovalPages(broker.handle, authorize_endpoint=AUTHORIZE, product="Example", privileges="Act as you.",
+                          prepare=prepare, token=lambda _n: "t" * 32)
+    csrf = cookie(pages.approve("GET", {"t": transaction}, {}, {}), CSRF_COOKIE)
+    answers = []
+    threads = [threading.Thread(target=lambda: answers.append(post_approve(pages, transaction, csrf))) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sorted(page.status for page in answers) == [303, 410]
+    sent = next(page for page in answers if page.status == 303)
+    nonce = parse_qs(urlsplit(header(sent, "Location")).query)["nonce"][0]
+    assert broker.store.get(transaction)["oidc_nonce"] == nonce
