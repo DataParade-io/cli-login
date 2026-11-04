@@ -28,6 +28,7 @@ import ctypes
 import json
 import os
 import re
+import shlex
 import signal
 import socket
 import stat
@@ -60,13 +61,19 @@ def _require_unix() -> None:
 
 
 def agent_command(namespace: str, *, state_dir: Path | str | None = None, socket_path: Path | str | None = None) -> str:
-    """The command that starts this namespace's agent, for guidance in error messages."""
-    command = f"{os.path.basename(sys.executable) or 'python'} -m cli_login.stores.agent serve --namespace {namespace}"
+    """The command that starts this namespace's agent, for guidance in error messages.
+
+    It names the interpreter that is running right now by its full path, because the library may be installed
+    only in a private environment (``pipx``, ``uv tool``) where a bare ``python`` cannot import it. Every part
+    is shell-quoted, so the line works when pasted.
+    """
+    parts = [sys.executable or "python", "-m", "cli_login.stores.agent", "serve", "--namespace", str(namespace)]
     if state_dir is not None:
-        command += f" --state-dir {state_dir}"
+        parts += ["--state-dir", str(state_dir)]
     if socket_path is not None:
-        command += f" --socket {socket_path}"
-    return command + " --background"
+        parts += ["--socket", str(socket_path)]
+    parts.append("--background")
+    return " ".join(shlex.quote(part) for part in parts)
 
 
 def socket_path_for(namespace: str, state_dir: Path | str | None = None, environ=None) -> Path:

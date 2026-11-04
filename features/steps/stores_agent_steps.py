@@ -1,4 +1,5 @@
 import os
+import shlex
 import shutil
 import socket
 import stat
@@ -219,3 +220,18 @@ def windows(context):
             raise AssertionError("expected refusal")
 
 
+
+
+@then("the start-up advice names the running interpreter by its full path")
+def advice_path(context):
+    words = shlex.split(agent.agent_command(NS, state_dir=context.state_dir))
+    assert words[0] == sys.executable and os.path.isabs(words[0]), words[0]
+
+
+@then("pasting the start-up advice into a shell starts a running agent")
+def advice_runs(context):
+    context.add_cleanup(agent.stop, NS, state_dir=context.state_dir)
+    done = subprocess.run(agent.agent_command(NS, state_dir=context.state_dir), shell=True, capture_output=True,
+                          text=True, timeout=60, check=False)
+    assert done.returncode == 0, done.stderr
+    assert agent.status(NS, state_dir=context.state_dir) is not None
